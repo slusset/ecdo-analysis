@@ -142,6 +142,64 @@ def load_aam_data(
     return df_monthly
 
 
+def load_polar_motion_data(
+    file_path: Union[str, Path] = "data/EOP_14_C04_IAU2000A_one_file_1962-now.txt",
+    resample_freq: Optional[str] = None
+) -> pd.DataFrame:
+    """
+    Load and process EOP_14 polar motion (x, y) data for Chandler wobble analysis.
+
+    The Chandler wobble appears as a ~433 day (~14 month) oscillation in the
+    polar motion coordinates. This loader preserves daily resolution by default
+    since the Chandler wobble requires high temporal resolution for proper analysis.
+
+    Parameters
+    ----------
+    file_path : str or Path
+        Path to the EOP_14 data file
+    resample_freq : str, optional
+        Resampling frequency (e.g., "D" for daily, "W" for weekly).
+        If None, returns daily data without resampling.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with datetime index and columns:
+        - x: X component of polar motion (arcseconds)
+        - y: Y component of polar motion (arcseconds)
+        - x_err: Error in x (arcseconds)
+        - y_err: Error in y (arcseconds)
+        - MJD: Modified Julian Date
+    """
+    # Read the file, skipping header lines
+    df = pd.read_csv(
+        file_path,
+        delim_whitespace=True,
+        skiprows=14,
+        names=[
+            'Year', 'Month', 'Day', 'MJD',
+            'x', 'y', 'UT1-UTC', 'LOD',
+            'dX', 'dY', 'x_Err', 'y_Err',
+            'UT1-UTC_Err', 'LOD_Err', 'dX_Err', 'dY_Err'
+        ]
+    )
+
+    # Create datetime index
+    df['datetime'] = pd.to_datetime(df[['Year', 'Month', 'Day']])
+    df.set_index('datetime', inplace=True)
+
+    # Select polar motion columns
+    result = df[['x', 'y', 'x_Err', 'y_Err', 'MJD']].copy()
+    result.columns = ['x', 'y', 'x_err', 'y_err', 'MJD']
+
+    # Optionally resample
+    if resample_freq is not None:
+        # For polar motion, use mean for coordinates
+        result = result.resample(resample_freq).mean()
+
+    return result
+
+
 def load_combined_data(
     lod_file: Union[str, Path] = "data/EOP_14_C04_IAU2000A_one_file_1962-now.txt",
     aam_dir: Union[str, Path] = "data",
