@@ -1,0 +1,115 @@
+name: Run Notebooks and Generate Figures
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'notebooks/**'
+      - 'src/**'
+      - '.github/workflows/run-notebooks.yml'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  run-notebooks:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: |
+          uv sync
+          uv pip install nbconvert nbformat tabulate
+
+      - name: Download IERS data
+        working-directory: data
+        run: |
+          echo "Downloading IERS EOP data..."
+          wget -q https://datacenter.iers.org/data/latestVersion/EOP_14_C04_IAU2000A_one_file_1962-now.txt
+
+          echo "Downloading AAM data (last 5 years for CI speed)..."
+          CURRENT_YEAR=$(date +%Y)
+          for year in $(seq $((CURRENT_YEAR - 5)) $CURRENT_YEAR); do
+            wget -q https://datacenter.iers.org/data/csv/ESMGFZ_AAM_v1.0_03h_${year}.asc.csv || echo "Warning: Year $year not available"
+          done
+
+          echo "Data download complete!"
+          ls -la
+
+      - name: Create figures directory
+        run: mkdir -p figures
+
+      - name: Run Chandler wobble analysis notebook
+        run: |
+          cd notebooks
+          uv run jupyter nbconvert --to notebook --execute \
+            --ExecutePreprocessor.timeout=600 \
+            --output chandler_wobble_analysis_executed.ipynb \
+            chandler_wobble_analysis.ipynb
+        continue-on-error: true
+
+      - name: Run LOD-AAM correlation notebook
+        run: |
+          cd notebooks
+          uv run jupyter nbconvert --to notebook --execute \
+            --ExecutePreprocessor.timeout=600 \
+            --output lod_aam_correlation_executed.ipynb \
+            lod_aam_correlation.ipynb
+        continue-on-error: true
+
+      - name: Generate Figures.md
+        run: |
+          uv run python scripts/generate_figures_md.py
+
+      - name: List generated artifacts
+        run: |
+          echo "=== Generated Figures ==="
+          ls -la figures/ || echo "No figures directory"
+          echo ""
+          echo "=== Figures.md content ==="
+          cat Figures.md || echo "Figures.md not generated"
+
+      - name: Commit and push figures
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Add figures and Figures.md
+          git add figures/ Figures.md || true
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update figures from notebook execution [skip ci]"
+            git push
+          fi
+
+      - name: Upload figures as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebook-figures
+          path: |
+            figures/
+            Figures.md
+          retention-days: 30
